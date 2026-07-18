@@ -1,0 +1,16 @@
+.env
+**/.env
+
+# Runtime / secrets (keep local only)
+adguard/conf/AdGuardHome.yaml
+adguard/work/
+traefik/letsencrypt/
+portainer/data/
+grafana/data/
+loki/data/
+promtail/data/
+speedtest-tracker/data/
+media/postgres/
+media/model-cache/
+netdata/lib/
+netdata/cache/

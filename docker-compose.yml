@@ -1,0 +1,180 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.cf.acme.dnschallenge=true
+      - --certificatesresolvers.cf.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cf.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      - --certificatesresolvers.cf.acme.dnschallenge.disablepropagationcheck=true
+      - --certificatesresolvers.cf.acme.dnschallenge.delaybeforecheck=30
+      - --certificatesresolvers.cf.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cf.acme.storage=/letsencrypt/acme.json
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/letsencrypt:/letsencrypt
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)
+      - traefik.http.routers.traefik.entrypoints=websecure
+      - traefik.http.routers.traefik.tls.certresolver=cf
+      - traefik.http.routers.traefik.service=api@internal
+    networks:
+      - monitoring
+      - proxy
+
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: loki
+    restart: unless-stopped
+    logging: *default-logging
+    user: root
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - ./loki/data:/loki
+    networks:
+      - monitoring
+
+  promtail:
+    image: grafana/promtail:3.3.2
+    container_name: promtail
+    restart: unless-stopped
+    logging: *default-logging
+    user: root
+    depends_on:
+      - loki
+    command:
+      - -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./promtail/promtail.yaml:/etc/promtail/config.yml:ro
+      - ./promtail/data:/promtail
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log/host:ro
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - loki
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: https://logs.${DOMAIN}
+    volumes:
+      - ./grafana/data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`logs.${DOMAIN}`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls.certresolver=cf
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+    networks:
+      - monitoring
+
+  adguard:
+    image: adguard/adguardhome:v0.107.73@sha256:7fbf01d73ecb7a32d2d9e6cef8bf88e64bd787889ca80a1e8bce30cd4c084442
+    container_name: adguard
+    restart: always
+    logging: *default-logging
+    volumes:
+      - ./adguard/work:/opt/adguardhome/work
+      - ./adguard/conf:/opt/adguardhome/conf
+    ports:
+      - 8080:80/tcp
+      - 53:53/udp
+      - 53:53/tcp
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.adguard.rule=Host(`dns.${DOMAIN}`)
+      - traefik.http.routers.adguard.entrypoints=websecure
+      - traefik.http.routers.adguard.tls.certresolver=cf
+      - traefik.http.services.adguard.loadbalancer.server.port=80
+    networks:
+      - monitoring
+
+  # Ookla ISP history (home uplink). Not LibreSpeed (server self-test).
+  # Docs: https://docs.speedtest-tracker.dev/getting-started/installation/using-docker-compose
+  speedtest-tracker:
+    image: lscr.io/linuxserver/speedtest-tracker:1.14.5
+    container_name: speedtest-tracker
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/Sao_Paulo
+      - APP_KEY=${SPEEDTEST_APP_KEY}
+      - APP_URL=https://speedtracker.${DOMAIN}
+      - ASSET_URL=https://speedtracker.${DOMAIN}
+      - DB_CONNECTION=sqlite
+      - APP_TIMEZONE=America/Sao_Paulo
+      - DISPLAY_TIMEZONE=America/Sao_Paulo
+      # Every 6h at minute 15
+      - SPEEDTEST_SCHEDULE=15 */6 * * *
+    volumes:
+      - ./speedtest-tracker/data:/config
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.speedtracker.rule=Host(`speedtracker.${DOMAIN}`)
+      - traefik.http.routers.speedtracker.entrypoints=websecure
+      - traefik.http.routers.speedtracker.tls.certresolver=cf
+      - traefik.http.services.speedtracker.loadbalancer.server.port=80
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:80/ >/dev/null || wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - monitoring
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    logging: *default-logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer/data:/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls.certresolver=cf
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+  proxy:
+    external: true
