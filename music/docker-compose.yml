@@ -1,0 +1,34 @@
+services:
+  navidrome:
+    image: deluan/navidrome:${NAVIDROME_VERSION:-latest}
+    container_name: navidrome
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      ND_LOGLEVEL: info
+      ND_BASEURL: https://music.${DOMAIN}
+      ND_SHAREURL: https://music.${DOMAIN}
+      ND_ENABLESHARING: "true"
+      ND_SCANNER_SCHEDULE: "@every 1h"
+      ND_DEFAULTLANGUAGE: pt
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      TZ: America/Sao_Paulo
+    volumes:
+      - ${NAVIDROME_DATA:-./data}:/data
+      - ${MUSIC_LOCATION}:/music:ro
+    ports:
+      - ${NAVIDROME_HTTP}:4533
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.navidrome.rule=Host(`music.${DOMAIN}`)
+      - traefik.http.routers.navidrome.entrypoints=websecure
+      - traefik.http.routers.navidrome.tls.certresolver=cf
+      - traefik.http.services.navidrome.loadbalancer.server.port=4533
+    networks:
+      - default
+      - proxy
+
+networks:
+  proxy:
+    external: true

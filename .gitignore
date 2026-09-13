@@ -12,5 +12,6 @@ promtail/data/
 speedtest-tracker/data/
 media/postgres/
 media/model-cache/
+music/data/
 netdata/lib/
 netdata/cache/

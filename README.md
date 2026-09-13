@@ -1,6 +1,6 @@
 # HomeServer
 
-Stack Docker para infraestrutura doméstica: reverse proxy com TLS, DNS filtrado, observabilidade de logs, monitoramento de banda e gestão de containers. O stack de mídia (Immich) fica em compose separado sob `media/`.
+Stack Docker para infraestrutura doméstica: reverse proxy com TLS, DNS filtrado, observabilidade de logs, monitoramento de banda e gestão de containers. Apps de mídia ficam em composes separados: Immich em `media/` e Navidrome em `music/`.
 
 ## Arquitetura
 
@@ -13,8 +13,9 @@ Stack Docker para infraestrutura doméstica: reverse proxy com TLS, DNS filtrado
 | **Speedtest Tracker** | Histórico de testes Ookla do uplink (a cada 6 h) | `https://speedtracker.${DOMAIN}` |
 | **Portainer** | Gestão de containers Docker | `https://portainer.${DOMAIN}` |
 | **Immich** (`media/`) | Galeria de fotos/vídeos | `https://media.${DOMAIN}` |
+| **Navidrome** (`music/`) | Streaming da biblioteca de música (Subsonic/Chora) | `https://music.${DOMAIN}` |
 
-Redes Compose: `monitoring` (stack principal) e `proxy` (externa; usada pelo Immich e pelo Traefik).
+Redes Compose: `monitoring` (stack principal) e `proxy` (externa; usada pelo Immich, pelo Navidrome e pelo Traefik).
 
 ## Estrutura do repositório
 
@@ -29,9 +30,12 @@ Redes Compose: `monitoring` (stack principal) e `proxy` (externa; usada pelo Imm
 ├── promtail/promtail.yaml      # Scraping de logs Docker e /var/log do host
 ├── grafana/provisioning/       # Datasource Loki pré-configurado
 ├── speedtest-tracker/data/     # Dados persistentes do Speedtest Tracker
-└── media/
-    ├── docker-compose.yml      # Immich (server, ML, Redis/Valkey, Postgres)
-    └── .env.template           # Variáveis do Immich
+├── media/
+│   ├── docker-compose.yml      # Immich (server, ML, Redis/Valkey, Postgres)
+│   └── .env.template           # Variáveis do Immich
+└── music/
+    ├── docker-compose.yml      # Navidrome
+    └── .env.template           # Variáveis do Navidrome
 ```
 
 Arquivos e diretórios de runtime (`.env`, dados, certificados, workdirs) estão no `.gitignore` e não devem ser versionados.
@@ -55,6 +59,7 @@ Arquivos e diretórios de runtime (`.env`, dados, certificados, workdirs) estão
    ```sh
    cp .env.template .env
    cp media/.env.template media/.env
+   cp music/.env.template music/.env
    ```
 
    Variáveis principais (`.env`):
@@ -84,6 +89,7 @@ Para o AdGuard escutar na porta **53** do host, o resolvedor DNS local do sistem
 ```sh
 docker compose pull
 docker compose -f media/docker-compose.yml pull
+docker compose -f music/docker-compose.yml pull
 ```
 
 Em seguida:
@@ -135,7 +141,29 @@ cd media
 docker compose up -d
 ```
 
+Navidrome (a partir da raiz do HomeServer):
+
+```sh
+mkdir -p /storage/music music/data
+# Ajuste o dono se PUID/PGID no .env não for o seu usuário
+chown -R 1000:1000 music/data
+docker compose -f music/docker-compose.yml up -d
+```
+
+Coloque os arquivos de áudio em `MUSIC_LOCATION` (`/storage/music` no `.env`). O volume é somente leitura.
+
+Na primeira subida, abra `https://music.${DOMAIN}` e crie o usuário admin. Depois, em Settings → Users, crie uma conta por pessoa da família. No Chora, a URL do servidor é essa mesma HTTPS, com usuário e senha do Navidrome.
+
+Playlists: crie no web UI ou no app; marque como pública para os outros usuários verem. Links `/share/...` (WhatsApp etc.) exigem o túnel Cloudflare no hostname `music`.
+
+Túnel `hometech` (mesmo padrão do Immich): acrescente o hostname `music.${DOMAIN}` → `http://localhost:8202` no `config.yml` do cloudflared (ver [Exemplos Docker/cloudflared](../Exemplos%20Docker/cloudflared/)) e publique o DNS:
+
+```sh
+sudo cloudflared tunnel route dns hometech music.pauloklaus.com.br
+sudo systemctl restart cloudflared
+```
+
 Endpoints HTTPS esperados (com `DOMAIN` configurado e registros DNS na Cloudflare):
 
 - `traefik.${DOMAIN}` · `dns.${DOMAIN}` · `logs.${DOMAIN}`
-- `speedtracker.${DOMAIN}` · `portainer.${DOMAIN}` · `media.${DOMAIN}`
+- `speedtracker.${DOMAIN}` · `portainer.${DOMAIN}` · `media.${DOMAIN}` · `music.${DOMAIN}`
